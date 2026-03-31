@@ -36,11 +36,13 @@ export function usePlayback({
   const voiceIdRef = useRef(voiceId);
   const docIdRef = useRef(documentId);
   const chunksRef = useRef<Chunk[]>([]);
+  const onProgressSaveRef = useRef(onProgressSave);
 
   // Keep refs in sync
   useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
   useEffect(() => { voiceIdRef.current = voiceId; }, [voiceId]);
   useEffect(() => { docIdRef.current = documentId; }, [documentId]);
+  useEffect(() => { onProgressSaveRef.current = onProgressSave; }, [onProgressSave]);
 
   // Rebuild chunks when document text changes
   useEffect(() => {
@@ -53,7 +55,6 @@ export function usePlayback({
     setChunks(newChunks);
     chunksRef.current = newChunks;
 
-    // Restore position from progress
     if (documentProgress > 0 && newChunks.length > 0) {
       const idx = newChunks.findIndex((c) => c.start >= documentProgress);
       const restored = idx >= 0 ? idx : newChunks.length - 1;
@@ -64,12 +65,12 @@ export function usePlayback({
       chunkIdxRef.current = 0;
     }
 
-    // Clear cache when document changes
     urlCache.current.forEach((url) => URL.revokeObjectURL(url));
     urlCache.current.clear();
     fetchingSet.current.clear();
   }, [documentText, documentProgress]);
 
+  // Synthesize a chunk — returns object URL or null
   const synthesize = useCallback(async (idx: number): Promise<string | null> => {
     const cached = urlCache.current.get(idx);
     if (cached) return cached;
@@ -78,15 +79,12 @@ export function usePlayback({
     if (!chunk) return null;
 
     if (fetchingSet.current.has(idx)) {
-      // Wait for in-flight fetch
       return new Promise((resolve) => {
         const interval = setInterval(() => {
-          const url = urlCache.current.get(idx);
-          if (url) {
+          if (urlCache.current.has(idx)) {
             clearInterval(interval);
-            resolve(url);
-          }
-          if (!fetchingSet.current.has(idx) && !urlCache.current.has(idx)) {
+            resolve(urlCache.current.get(idx)!);
+          } else if (!fetchingSet.current.has(idx)) {
             clearInterval(interval);
             resolve(null);
           }
@@ -114,8 +112,6 @@ export function usePlayback({
       const url = URL.createObjectURL(blob);
       urlCache.current.set(idx, url);
       return url;
-    } catch (e) {
-      throw e;
     } finally {
       fetchingSet.current.delete(idx);
     }
@@ -127,9 +123,11 @@ export function usePlayback({
     synthesize(idx).catch(() => {});
   }, [synthesize]);
 
+  // Use a ref so onended always calls the latest version
+  const playChunkRef = useRef<(idx: number) => Promise<void>>(async () => {});
+
   const playChunk = useCallback(async (idx: number) => {
     if (idx >= chunksRef.current.length) {
-      // Reached end
       setIsPlaying(false);
       isPlayingRef.current = false;
       return;
@@ -149,7 +147,6 @@ export function usePlayback({
         return;
       }
 
-      // Prefetch next chunks
       prefetch(idx + 1);
       prefetch(idx + 2);
 
@@ -164,19 +161,17 @@ export function usePlayback({
       setIsBuffering(false);
 
       audio.onended = () => {
-        // Save progress
         const currentDocId = docIdRef.current;
         const nextChunk = chunksRef.current[chunkIdxRef.current + 1];
         if (currentDocId && nextChunk) {
-          onProgressSave(currentDocId, nextChunk.start);
+          onProgressSaveRef.current(currentDocId, nextChunk.start);
         } else if (currentDocId) {
-          // Finished last chunk — save end of text
           const lastChunk = chunksRef.current[chunkIdxRef.current];
-          if (lastChunk) onProgressSave(currentDocId, lastChunk.end);
+          if (lastChunk) onProgressSaveRef.current(currentDocId, lastChunk.end);
         }
 
         if (isPlayingRef.current) {
-          playChunk(chunkIdxRef.current + 1);
+          playChunkRef.current(chunkIdxRef.current + 1);
         }
       };
 
@@ -193,15 +188,18 @@ export function usePlayback({
       isPlayingRef.current = false;
       setIsBuffering(false);
     }
-  }, [synthesize, prefetch, onProgressSave]);
+  }, [synthesize, prefetch]);
+
+  // Keep the ref pointing to latest playChunk
+  useEffect(() => { playChunkRef.current = playChunk; }, [playChunk]);
 
   const play = useCallback((fromIdx?: number) => {
     const idx = fromIdx ?? chunkIdxRef.current;
     setError(null);
     setIsPlaying(true);
     isPlayingRef.current = true;
-    playChunk(idx);
-  }, [playChunk]);
+    playChunkRef.current(idx);
+  }, []);
 
   const pause = useCallback(() => {
     setIsPlaying(false);
@@ -216,23 +214,22 @@ export function usePlayback({
       setIsPlaying(true);
       isPlayingRef.current = true;
       audioRef.current.play().catch(() => {
-        playChunk(chunkIdxRef.current);
+        playChunkRef.current(chunkIdxRef.current);
       });
       audioRef.current.onended = () => {
         const currentDocId = docIdRef.current;
         const nextChunk = chunksRef.current[chunkIdxRef.current + 1];
         if (currentDocId && nextChunk) {
-          onProgressSave(currentDocId, nextChunk.start);
+          onProgressSaveRef.current(currentDocId, nextChunk.start);
         }
         if (isPlayingRef.current) {
-          playChunk(chunkIdxRef.current + 1);
+          playChunkRef.current(chunkIdxRef.current + 1);
         }
       };
     } else {
-      // No valid audio to resume — restart from current chunk
       play(chunkIdxRef.current);
     }
-  }, [play, playChunk, onProgressSave]);
+  }, [play]);
 
   const stop = useCallback(() => {
     setIsPlaying(false);
@@ -263,16 +260,16 @@ export function usePlayback({
     chunkIdxRef.current = targetIdx;
 
     if (isPlayingRef.current) {
-      playChunk(targetIdx);
+      playChunkRef.current(targetIdx);
     }
-  }, [playChunk]);
+  }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current) {
+        audioRef.current.onended = null;
+        audioRef.current.onerror = null;
         audioRef.current.pause();
-        audioRef.current.src = "";
       }
       urlCache.current.forEach((url) => URL.revokeObjectURL(url));
     };
