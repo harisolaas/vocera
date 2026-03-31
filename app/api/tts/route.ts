@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     });
   }
 
-  let body: { voiceId?: string; text?: string };
+  let body: { voiceId?: string; text?: string; previousText?: string };
   try {
     body = await request.json();
   } catch {
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const { voiceId, text } = body;
+  const { voiceId, text, previousText } = body;
   if (!voiceId || !text) {
     return new Response(JSON.stringify({ error: "Missing voiceId or text" }), {
       status: 400,
@@ -27,8 +27,21 @@ export async function POST(request: Request) {
     });
   }
 
+  const elBody: Record<string, unknown> = {
+    text,
+    model_id: "eleven_multilingual_v2",
+    voice_settings: {
+      stability: 0.45,
+      similarity_boost: 0.75,
+    },
+  };
+
+  if (previousText) {
+    elBody.previous_text = previousText;
+  }
+
   const elResponse = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
     {
       method: "POST",
       headers: {
@@ -36,14 +49,7 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
         Accept: "audio/mpeg",
       },
-      body: JSON.stringify({
-        text,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.45,
-          similarity_boost: 0.75,
-        },
-      }),
+      body: JSON.stringify(elBody),
     }
   );
 

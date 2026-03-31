@@ -27,9 +27,16 @@ export function usePlayback({
   const [isBuffering, setIsBuffering] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const urlCache = useRef<Map<number, string>>(new Map());
+  // Audio buffer cache: chunkIndex → ArrayBuffer of audio data
+  const bufferCache = useRef<Map<number, ArrayBuffer>>(new Map());
   const fetchingSet = useRef<Set<number>>(new Set());
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Web Audio API
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+
+  // Stable refs for values read in async callbacks
   const chunkIdxRef = useRef(0);
   const isPlayingRef = useRef(false);
   const apiKeyRef = useRef(apiKey);
@@ -38,11 +45,23 @@ export function usePlayback({
   const chunksRef = useRef<Chunk[]>([]);
   const onProgressSaveRef = useRef(onProgressSave);
 
-  // Keep refs in sync
   useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
   useEffect(() => { voiceIdRef.current = voiceId; }, [voiceId]);
   useEffect(() => { docIdRef.current = documentId; }, [documentId]);
   useEffect(() => { onProgressSaveRef.current = onProgressSave; }, [onProgressSave]);
+
+  // Get or create AudioContext (must be called from user gesture the first time)
+  const getAudioContext = useCallback(() => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioContext();
+      gainNodeRef.current = audioCtxRef.current.createGain();
+      gainNodeRef.current.connect(audioCtxRef.current.destination);
+    }
+    if (audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  }, []);
 
   // Rebuild chunks when document text changes
   useEffect(() => {
@@ -65,14 +84,13 @@ export function usePlayback({
       chunkIdxRef.current = 0;
     }
 
-    urlCache.current.forEach((url) => URL.revokeObjectURL(url));
-    urlCache.current.clear();
+    bufferCache.current.clear();
     fetchingSet.current.clear();
   }, [documentText, documentProgress]);
 
-  // Synthesize a chunk — returns object URL or null
-  const synthesize = useCallback(async (idx: number): Promise<string | null> => {
-    const cached = urlCache.current.get(idx);
+  // Fetch audio for a chunk as ArrayBuffer
+  const synthesize = useCallback(async (idx: number): Promise<ArrayBuffer | null> => {
+    const cached = bufferCache.current.get(idx);
     if (cached) return cached;
 
     const chunk = chunksRef.current[idx];
@@ -81,9 +99,9 @@ export function usePlayback({
     if (fetchingSet.current.has(idx)) {
       return new Promise((resolve) => {
         const interval = setInterval(() => {
-          if (urlCache.current.has(idx)) {
+          if (bufferCache.current.has(idx)) {
             clearInterval(interval);
-            resolve(urlCache.current.get(idx)!);
+            resolve(bufferCache.current.get(idx)!);
           } else if (!fetchingSet.current.has(idx)) {
             clearInterval(interval);
             resolve(null);
@@ -94,13 +112,19 @@ export function usePlayback({
 
     fetchingSet.current.add(idx);
     try {
+      const prevChunk = idx > 0 ? chunksRef.current[idx - 1] : null;
+
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-el-key": apiKeyRef.current,
         },
-        body: JSON.stringify({ voiceId: voiceIdRef.current, text: chunk.text }),
+        body: JSON.stringify({
+          voiceId: voiceIdRef.current,
+          text: chunk.text,
+          previousText: prevChunk?.text,
+        }),
       });
 
       if (!res.ok) {
@@ -108,10 +132,9 @@ export function usePlayback({
         throw new Error(errText || `TTS failed with status ${res.status}`);
       }
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      urlCache.current.set(idx, url);
-      return url;
+      const arrayBuffer = await res.arrayBuffer();
+      bufferCache.current.set(idx, arrayBuffer);
+      return arrayBuffer;
     } finally {
       fetchingSet.current.delete(idx);
     }
@@ -119,11 +142,11 @@ export function usePlayback({
 
   const prefetch = useCallback((idx: number) => {
     if (idx < 0 || idx >= chunksRef.current.length) return;
-    if (urlCache.current.has(idx) || fetchingSet.current.has(idx)) return;
+    if (bufferCache.current.has(idx) || fetchingSet.current.has(idx)) return;
     synthesize(idx).catch(() => {});
   }, [synthesize]);
 
-  // Use a ref so onended always calls the latest version
+  // Core playback: decode and schedule a chunk via Web Audio API
   const playChunkRef = useRef<(idx: number) => Promise<void>>(async () => {});
 
   const playChunk = useCallback(async (idx: number) => {
@@ -139,10 +162,16 @@ export function usePlayback({
     setError(null);
 
     try {
-      const url = await synthesize(idx);
-      if (!url) {
+      const audioData = await synthesize(idx);
+      if (!audioData) {
         setIsPlaying(false);
         isPlayingRef.current = false;
+        setIsBuffering(false);
+        return;
+      }
+
+      // Check if we were stopped while fetching
+      if (!isPlayingRef.current) {
         setIsBuffering(false);
         return;
       }
@@ -150,17 +179,39 @@ export function usePlayback({
       prefetch(idx + 1);
       prefetch(idx + 2);
 
-      if (audioRef.current) {
-        audioRef.current.onended = null;
-        audioRef.current.onerror = null;
-        audioRef.current.pause();
+      const ctx = getAudioContext();
+
+      // Stop any currently playing source
+      if (currentSourceRef.current) {
+        try {
+          currentSourceRef.current.onended = null;
+          currentSourceRef.current.stop();
+        } catch {
+          // ignore if already stopped
+        }
+        currentSourceRef.current = null;
       }
 
-      const audio = new Audio(url);
-      audioRef.current = audio;
+      // Decode the audio data
+      const audioBuffer = await ctx.decodeAudioData(audioData.slice(0));
+
+      // Check again if we were stopped during decoding
+      if (!isPlayingRef.current) {
+        setIsBuffering(false);
+        return;
+      }
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(gainNodeRef.current!);
+      currentSourceRef.current = source;
+
       setIsBuffering(false);
 
-      audio.onended = () => {
+      source.onended = () => {
+        currentSourceRef.current = null;
+
+        // Save progress
         const currentDocId = docIdRef.current;
         const nextChunk = chunksRef.current[chunkIdxRef.current + 1];
         if (currentDocId && nextChunk) {
@@ -175,22 +226,15 @@ export function usePlayback({
         }
       };
 
-      audio.onerror = () => {
-        setError("Audio playback error");
-        setIsPlaying(false);
-        isPlayingRef.current = false;
-      };
-
-      await audio.play();
+      source.start(0);
     } catch (e) {
       setError(e instanceof Error ? e.message : "TTS synthesis failed");
       setIsPlaying(false);
       isPlayingRef.current = false;
       setIsBuffering(false);
     }
-  }, [synthesize, prefetch]);
+  }, [synthesize, prefetch, getAudioContext]);
 
-  // Keep the ref pointing to latest playChunk
   useEffect(() => { playChunkRef.current = playChunk; }, [playChunk]);
 
   const play = useCallback((fromIdx?: number) => {
@@ -198,35 +242,30 @@ export function usePlayback({
     setError(null);
     setIsPlaying(true);
     isPlayingRef.current = true;
+    // Ensure AudioContext is created in user gesture context
+    getAudioContext();
     playChunkRef.current(idx);
-  }, []);
+  }, [getAudioContext]);
 
   const pause = useCallback(() => {
     setIsPlaying(false);
     isPlayingRef.current = false;
-    if (audioRef.current) {
-      audioRef.current.pause();
+    if (audioCtxRef.current && audioCtxRef.current.state === "running") {
+      audioCtxRef.current.suspend();
     }
   }, []);
 
   const resume = useCallback(() => {
-    if (audioRef.current && audioRef.current.paused && audioRef.current.src && audioRef.current.src !== "") {
-      setIsPlaying(true);
-      isPlayingRef.current = true;
-      audioRef.current.play().catch(() => {
+    setIsPlaying(true);
+    isPlayingRef.current = true;
+    if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume();
+      // If there's no active source (e.g. after error), restart from current chunk
+      if (!currentSourceRef.current) {
         playChunkRef.current(chunkIdxRef.current);
-      });
-      audioRef.current.onended = () => {
-        const currentDocId = docIdRef.current;
-        const nextChunk = chunksRef.current[chunkIdxRef.current + 1];
-        if (currentDocId && nextChunk) {
-          onProgressSaveRef.current(currentDocId, nextChunk.start);
-        }
-        if (isPlayingRef.current) {
-          playChunkRef.current(chunkIdxRef.current + 1);
-        }
-      };
+      }
     } else {
+      // No audio context yet or no source — start fresh
       play(chunkIdxRef.current);
     }
   }, [play]);
@@ -234,11 +273,17 @@ export function usePlayback({
   const stop = useCallback(() => {
     setIsPlaying(false);
     isPlayingRef.current = false;
-    if (audioRef.current) {
-      audioRef.current.onended = null;
-      audioRef.current.onerror = null;
-      audioRef.current.pause();
-      audioRef.current = null;
+    if (currentSourceRef.current) {
+      try {
+        currentSourceRef.current.onended = null;
+        currentSourceRef.current.stop();
+      } catch {
+        // ignore
+      }
+      currentSourceRef.current = null;
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state === "running") {
+      audioCtxRef.current.suspend();
     }
     setChunkIdx(0);
     chunkIdxRef.current = 0;
@@ -249,11 +294,14 @@ export function usePlayback({
     if (totalChunks === 0) return;
     const targetIdx = Math.min(Math.floor(pct * totalChunks), totalChunks - 1);
 
-    if (audioRef.current) {
-      audioRef.current.onended = null;
-      audioRef.current.onerror = null;
-      audioRef.current.pause();
-      audioRef.current = null;
+    if (currentSourceRef.current) {
+      try {
+        currentSourceRef.current.onended = null;
+        currentSourceRef.current.stop();
+      } catch {
+        // ignore
+      }
+      currentSourceRef.current = null;
     }
 
     setChunkIdx(targetIdx);
@@ -264,14 +312,21 @@ export function usePlayback({
     }
   }, []);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.onended = null;
-        audioRef.current.onerror = null;
-        audioRef.current.pause();
+      if (currentSourceRef.current) {
+        try {
+          currentSourceRef.current.onended = null;
+          currentSourceRef.current.stop();
+        } catch {
+          // ignore
+        }
       }
-      urlCache.current.forEach((url) => URL.revokeObjectURL(url));
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close();
+        audioCtxRef.current = null;
+      }
     };
   }, []);
 
