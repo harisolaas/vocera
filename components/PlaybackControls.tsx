@@ -48,7 +48,7 @@ export default function PlaybackControls({
   };
 
   return (
-    <div className="border-t border-[#2c2820] bg-[#0c0b09] px-4 py-3">
+    <div className="border-t border-[#2c2820] bg-[#0c0b09] px-4 py-3 mb-14 sm:mb-0">
       {/* Progress track */}
       <div
         className="h-1.5 bg-[#1c1a16] rounded-full cursor-pointer mb-3 group"

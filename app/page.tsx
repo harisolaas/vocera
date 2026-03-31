@@ -210,8 +210,10 @@ export default function Home() {
       </div>
 
       {/* Mobile layout */}
-      <div className="sm:hidden flex flex-col h-screen pb-14">
-        <main className="flex-1 overflow-y-auto">{renderMobileContent()}</main>
+      <div className="sm:hidden flex flex-col h-screen">
+        <main className={`flex-1 ${mobileTab === "reader" ? "flex flex-col min-h-0" : "overflow-y-auto pb-14"}`}>
+          {renderMobileContent()}
+        </main>
         <MobileNav
           active={mobileTab}
           hasActiveDoc={!!activeDoc}
