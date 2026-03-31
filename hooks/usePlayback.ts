@@ -196,6 +196,7 @@ export function usePlayback({
 
   const play = useCallback((fromIdx?: number) => {
     const idx = fromIdx ?? chunkIdxRef.current;
+    setError(null);
     setIsPlaying(true);
     isPlayingRef.current = true;
     playChunk(idx);
@@ -210,11 +211,10 @@ export function usePlayback({
   }, []);
 
   const resume = useCallback(() => {
-    if (audioRef.current && audioRef.current.paused && audioRef.current.src) {
+    if (audioRef.current && audioRef.current.paused && audioRef.current.src && audioRef.current.src !== "") {
       setIsPlaying(true);
       isPlayingRef.current = true;
       audioRef.current.play().catch(() => {
-        // If resume fails, restart from current chunk
         playChunk(chunkIdxRef.current);
       });
       audioRef.current.onended = () => {
@@ -228,7 +228,8 @@ export function usePlayback({
         }
       };
     } else {
-      play();
+      // No valid audio to resume — restart from current chunk
+      play(chunkIdxRef.current);
     }
   }, [play, playChunk, onProgressSave]);
 
