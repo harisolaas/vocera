@@ -1,65 +1,220 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useCallback } from "react";
+import Sidebar from "@/components/Sidebar";
+import AddForm from "@/components/AddForm";
+import SettingsPanel from "@/components/SettingsPanel";
+import ReaderView from "@/components/ReaderView";
+import MobileNav from "@/components/MobileNav";
+import DocList from "@/components/DocList";
+import { useDocuments } from "@/hooks/useDocuments";
+import { useSettings } from "@/hooks/useSettings";
+import { usePlayback } from "@/hooks/usePlayback";
+
+type View = "home" | "add" | "settings" | "reader";
+type MobileTab = "docs" | "add" | "reader" | "settings";
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+  const { docs, loaded: docsLoaded, addDocument, deleteDocument, updateProgress } = useDocuments();
+  const { settings, loaded: settingsLoaded, setApiKey, setVoiceId } = useSettings();
+  const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [view, setView] = useState<View>("home");
+  const [mobileTab, setMobileTab] = useState<MobileTab>("docs");
+
+  const activeDoc = docs.find((d) => d.id === activeDocId) ?? null;
+
+  const {
+    chunks,
+    chunkIdx,
+    isPlaying,
+    isBuffering,
+    error,
+    play,
+    pause,
+    resume,
+    stop,
+    seek,
+    setError,
+  } = usePlayback({
+    apiKey: settings.apiKey,
+    voiceId: settings.voiceId,
+    documentId: activeDocId,
+    documentText: activeDoc?.text ?? "",
+    documentProgress: activeDoc?.progress ?? 0,
+    onProgressSave: updateProgress,
+  });
+
+  const voiceName = settings.voices.find((v) => v.id === settings.voiceId)?.name ?? "Unknown";
+
+  const handleSelectDoc = useCallback((id: string) => {
+    stop();
+    setActiveDocId(id);
+    setView("reader");
+    setMobileTab("reader");
+  }, [stop]);
+
+  const handleDeleteDoc = useCallback((id: string) => {
+    if (id === activeDocId) {
+      stop();
+      setActiveDocId(null);
+      setView("home");
+      setMobileTab("docs");
+    }
+    deleteDocument(id);
+  }, [activeDocId, stop, deleteDocument]);
+
+  const handleAdd = useCallback((title: string, text: string) => {
+    const id = addDocument(title, text);
+    setActiveDocId(id);
+    setView("reader");
+    setMobileTab("reader");
+  }, [addDocument]);
+
+  const handlePlay = useCallback(() => {
+    if (!settings.apiKey) {
+      setView("settings");
+      setMobileTab("settings");
+      return;
+    }
+    play();
+  }, [settings.apiKey, play]);
+
+  if (!docsLoaded || !settingsLoaded) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-[#0c0b09]">
+        <span className="text-[#6a6050] font-mono text-sm">Loading…</span>
+      </div>
+    );
+  }
+
+  // Desktop content
+  const renderDesktopContent = () => {
+    switch (view) {
+      case "add":
+        return <AddForm onAdd={handleAdd} />;
+      case "settings":
+        return (
+          <SettingsPanel
+            settings={settings}
+            onSetApiKey={setApiKey}
+            onSetVoiceId={setVoiceId}
+          />
+        );
+      case "reader":
+        if (!activeDoc) return renderHome();
+        return (
+          <ReaderView
+            doc={activeDoc}
+            chunks={chunks}
+            chunkIdx={chunkIdx}
+            isPlaying={isPlaying}
+            isBuffering={isBuffering}
+            error={error}
+            voiceName={voiceName}
+            onPlay={handlePlay}
+            onPause={pause}
+            onResume={resume}
+            onStop={stop}
+            onSeek={seek}
+            onDismissError={() => setError(null)}
+          />
+        );
+      default:
+        return renderHome();
+    }
+  };
+
+  const renderHome = () => (
+    <div className="flex flex-col items-center justify-center h-full text-center px-4">
+      <h2 className="font-serif text-2xl text-[#ddd5c2] mb-2">Vocera</h2>
+      <p className="font-mono text-sm text-[#6a6050] max-w-sm">
+        Your personal text-to-speech reader. Add a document to get started, or select one from the
+        sidebar.
+      </p>
     </div>
+  );
+
+  // Mobile content
+  const renderMobileContent = () => {
+    switch (mobileTab) {
+      case "docs":
+        return (
+          <div className="px-2 py-4">
+            <div className="flex items-center justify-between px-2 mb-4">
+              <h1 className="font-serif text-lg text-[#d4a847]">Vocera</h1>
+            </div>
+            <DocList
+              docs={docs}
+              activeId={activeDocId}
+              onSelect={handleSelectDoc}
+              onDelete={handleDeleteDoc}
+            />
+          </div>
+        );
+      case "add":
+        return <AddForm onAdd={handleAdd} />;
+      case "settings":
+        return (
+          <SettingsPanel
+            settings={settings}
+            onSetApiKey={setApiKey}
+            onSetVoiceId={setVoiceId}
+          />
+        );
+      case "reader":
+        if (!activeDoc) {
+          return (
+            <div className="flex items-center justify-center h-full text-center px-4">
+              <p className="font-mono text-sm text-[#6a6050]">
+                Select a document first.
+              </p>
+            </div>
+          );
+        }
+        return (
+          <ReaderView
+            doc={activeDoc}
+            chunks={chunks}
+            chunkIdx={chunkIdx}
+            isPlaying={isPlaying}
+            isBuffering={isBuffering}
+            error={error}
+            voiceName={voiceName}
+            onPlay={handlePlay}
+            onPause={pause}
+            onResume={resume}
+            onStop={stop}
+            onSeek={seek}
+            onDismissError={() => setError(null)}
+          />
+        );
+    }
+  };
+
+  return (
+    <>
+      {/* Desktop layout */}
+      <div className="hidden sm:flex h-screen">
+        <Sidebar
+          docs={docs}
+          activeId={activeDocId}
+          onSelect={handleSelectDoc}
+          onDelete={handleDeleteDoc}
+          onAdd={() => setView("add")}
+          onSettings={() => setView("settings")}
+        />
+        <main className="flex-1 flex flex-col overflow-hidden">{renderDesktopContent()}</main>
+      </div>
+
+      {/* Mobile layout */}
+      <div className="sm:hidden flex flex-col h-screen pb-14">
+        <main className="flex-1 overflow-y-auto">{renderMobileContent()}</main>
+        <MobileNav
+          active={mobileTab}
+          hasActiveDoc={!!activeDoc}
+          onChange={setMobileTab}
+        />
+      </div>
+    </>
   );
 }
