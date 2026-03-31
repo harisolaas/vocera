@@ -154,8 +154,9 @@ export function usePlayback({
       prefetch(idx + 2);
 
       if (audioRef.current) {
+        audioRef.current.onended = null;
+        audioRef.current.onerror = null;
         audioRef.current.pause();
-        audioRef.current.src = "";
       }
 
       const audio = new Audio(url);
@@ -237,8 +238,9 @@ export function usePlayback({
     setIsPlaying(false);
     isPlayingRef.current = false;
     if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
       audioRef.current.pause();
-      audioRef.current.src = "";
       audioRef.current = null;
     }
     setChunkIdx(0);
@@ -251,8 +253,9 @@ export function usePlayback({
     const targetIdx = Math.min(Math.floor(pct * totalChunks), totalChunks - 1);
 
     if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
       audioRef.current.pause();
-      audioRef.current.src = "";
       audioRef.current = null;
     }
 
