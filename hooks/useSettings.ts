@@ -1,15 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Settings, Voice } from "@/types";
-import { DEFAULT_VOICES, fetchVoices } from "@/lib/voices";
+import { Settings } from "@/types";
+import { DEFAULT_VOICES } from "@/lib/voices";
 
 const STORAGE_KEY = "vocera-settings";
 
 const defaultSettings: Settings = {
   apiKey: "",
   voiceId: DEFAULT_VOICES[0].id,
-  voices: DEFAULT_VOICES,
 };
 
 function loadSettings(): Settings {
@@ -26,13 +25,18 @@ function saveSettings(settings: Settings) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }
 
+export type KeyStatus = "idle" | "valid" | "no-key";
+
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [loaded, setLoaded] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<KeyStatus>("idle");
 
   useEffect(() => {
-    setSettings(loadSettings());
+    const s = loadSettings();
+    setSettings(s);
     setLoaded(true);
+    setKeyStatus(s.apiKey ? "valid" : "no-key");
   }, []);
 
   useEffect(() => {
@@ -40,21 +44,18 @@ export function useSettings() {
   }, [settings, loaded]);
 
   const setApiKey = useCallback((apiKey: string) => {
-    setSettings((prev) => ({ ...prev, apiKey }));
-    if (apiKey) {
-      fetchVoices(apiKey).then((voices) => {
-        setSettings((prev) => ({ ...prev, voices }));
-      });
+    if (!apiKey) {
+      setSettings((prev) => ({ ...prev, apiKey: "" }));
+      setKeyStatus("no-key");
+      return;
     }
+    setSettings((prev) => ({ ...prev, apiKey }));
+    setKeyStatus("valid");
   }, []);
 
   const setVoiceId = useCallback((voiceId: string) => {
     setSettings((prev) => ({ ...prev, voiceId }));
   }, []);
 
-  const setVoices = useCallback((voices: Voice[]) => {
-    setSettings((prev) => ({ ...prev, voices }));
-  }, []);
-
-  return { settings, loaded, setApiKey, setVoiceId, setVoices };
+  return { settings, loaded, keyStatus, setApiKey, setVoiceId };
 }

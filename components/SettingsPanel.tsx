@@ -2,14 +2,17 @@
 
 import { useState } from "react";
 import { Settings } from "@/types";
+import { DEFAULT_VOICES } from "@/lib/voices";
+import { KeyStatus } from "@/hooks/useSettings";
 
 interface SettingsPanelProps {
   settings: Settings;
+  keyStatus: KeyStatus;
   onSetApiKey: (key: string) => void;
   onSetVoiceId: (id: string) => void;
 }
 
-export default function SettingsPanel({ settings, onSetApiKey, onSetVoiceId }: SettingsPanelProps) {
+export default function SettingsPanel({ settings, keyStatus, onSetApiKey, onSetVoiceId }: SettingsPanelProps) {
   const [keyInput, setKeyInput] = useState(settings.apiKey);
 
   const handleSave = () => {
@@ -41,8 +44,16 @@ export default function SettingsPanel({ settings, onSetApiKey, onSetVoiceId }: S
               Save
             </button>
           </div>
-          <p className="text-xs font-mono text-[#6a6050] mt-1.5">
-            Stored locally in your browser. Never sent to our servers.
+          <div className="mt-1.5">
+            {keyStatus === "valid" && (
+              <span className="text-xs font-mono text-green-400">● Key saved</span>
+            )}
+            {keyStatus === "no-key" && (
+              <span className="text-xs font-mono text-[#6a6050]">No key set</span>
+            )}
+          </div>
+          <p className="text-xs font-mono text-[#6a6050] mt-1">
+            Requires Text to Speech access. Stored locally in your browser.
           </p>
         </div>
 
@@ -50,7 +61,7 @@ export default function SettingsPanel({ settings, onSetApiKey, onSetVoiceId }: S
         <div>
           <label className="block text-xs font-mono text-[#6a6050] mb-3">Voice</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {settings.voices.map((voice) => (
+            {DEFAULT_VOICES.map((voice) => (
               <button
                 key={voice.id}
                 onClick={() => onSetVoiceId(voice.id)}
@@ -61,7 +72,6 @@ export default function SettingsPanel({ settings, onSetApiKey, onSetVoiceId }: S
                 }`}
               >
                 <div className="text-sm font-serif">{voice.name}</div>
-                <div className="text-xs font-mono text-[#6a6050] mt-0.5">{voice.category}</div>
               </button>
             ))}
           </div>

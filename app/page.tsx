@@ -9,6 +9,7 @@ import MobileNav from "@/components/MobileNav";
 import DocList from "@/components/DocList";
 import { useDocuments } from "@/hooks/useDocuments";
 import { useSettings } from "@/hooks/useSettings";
+import { DEFAULT_VOICES } from "@/lib/voices";
 import { usePlayback } from "@/hooks/usePlayback";
 
 type View = "home" | "add" | "settings" | "reader";
@@ -16,7 +17,7 @@ type MobileTab = "docs" | "add" | "reader" | "settings";
 
 export default function Home() {
   const { docs, loaded: docsLoaded, addDocument, deleteDocument, updateProgress } = useDocuments();
-  const { settings, loaded: settingsLoaded, setApiKey, setVoiceId } = useSettings();
+  const { settings, loaded: settingsLoaded, keyStatus, setApiKey, setVoiceId } = useSettings();
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
   const [mobileTab, setMobileTab] = useState<MobileTab>("docs");
@@ -44,7 +45,7 @@ export default function Home() {
     onProgressSave: updateProgress,
   });
 
-  const voiceName = settings.voices.find((v) => v.id === settings.voiceId)?.name ?? "Unknown";
+  const voiceName = DEFAULT_VOICES.find((v) => v.id === settings.voiceId)?.name ?? "Unknown";
 
   const handleSelectDoc = useCallback((id: string) => {
     stop();
@@ -96,6 +97,7 @@ export default function Home() {
         return (
           <SettingsPanel
             settings={settings}
+            keyStatus={keyStatus}
             onSetApiKey={setApiKey}
             onSetVoiceId={setVoiceId}
           />
@@ -157,6 +159,7 @@ export default function Home() {
         return (
           <SettingsPanel
             settings={settings}
+            keyStatus={keyStatus}
             onSetApiKey={setApiKey}
             onSetVoiceId={setVoiceId}
           />

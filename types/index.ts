@@ -23,5 +23,4 @@ export interface Chunk {
 export interface Settings {
   apiKey: string;
   voiceId: string;
-  voices: Voice[];
 }

@@ -14,20 +14,3 @@ export const DEFAULT_VOICES: Voice[] = [
   { id: "g5CIjZEefAph4nQFvHAz", name: "Ethan", category: "premade" },
   { id: "oWAxZDx7w5VEj9dCyTzz", name: "Grace", category: "premade" },
 ];
-
-export async function fetchVoices(apiKey: string): Promise<Voice[]> {
-  try {
-    const res = await fetch("https://api.elevenlabs.io/v1/voices", {
-      headers: { "xi-api-key": apiKey },
-    });
-    if (!res.ok) return DEFAULT_VOICES;
-    const data = await res.json();
-    return (data.voices ?? []).map((v: { voice_id: string; name: string; category: string }) => ({
-      id: v.voice_id,
-      name: v.name,
-      category: v.category,
-    }));
-  } catch {
-    return DEFAULT_VOICES;
-  }
-}
